@@ -11,6 +11,10 @@
 #define __NAME__ "Tccgi"
 #define __VERSION__ "0.2.4"
     
+
+#ifdef UNICODE
+#undef UNICODE
+#endif
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +81,7 @@ typedef struct _Client {
     Request request;
     SOCKET fd;
     StatusFlag flag;
+    BOOL keep;
     struct sockaddr_in address;
     time_t active;
 } Client;
@@ -92,6 +97,15 @@ char HTTP_CODE[HTTP_CODE_NUM][50] = {
     "408", "Request Timeout",
     "414", "Request-URI Too Long",
     "500", "Internal Server Error"
+};
+
+char* HTTP_METHOD[] = {
+    "HEAD",
+    "GET",
+    "PUT",
+    "POST",
+    "DELETE",
+    "OPTIONS"
 };
 
 #define MIME_TYPE_NUM 12
@@ -118,11 +132,8 @@ Client* clients[MAX_CLIENT];
 int top_client = 0;
 
 void reset_client(Client* client) {
-    // SOCKET fd = client->fd;
-    // client->fd = fd;
-    // memset(&client->response, 0, sizeof(Response));
-    // memset(&client->request, 0, sizeof(Request));
     client->flag = READ;
+    client->keep = FALSE;
     memset((Request*)&client->request, 0, sizeof(Request));
     memset(client->response.body, 0, sizeof(char)*MAX_BODY);
     client->response.header_num = 0;
@@ -137,6 +148,7 @@ Client* create_client() {
     client->response.body = (char*)malloc(sizeof(char)*MAX_BODY);
     client->active = time(NULL);
     client->flag = READ;
+    client->keep = FALSE;
     return client;
 }
 
@@ -204,7 +216,8 @@ char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     return cdr;
 }
 
-int parse_head(const char *data, size_t len, Request *req) {
+int parse_head(Request* req) {
+    char* data = req->buff;
     size_t i = 0, pi = 0;
     BOOL has_query = FALSE;
     while (i < 6 && data[i] != ' ') {
@@ -493,7 +506,7 @@ int cgi_process(Client* const client, const char* cmd) {
     si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     Logln(client->request.params);
     build_cgi_env(lpEnv, (Request*)&client->request);
-    if (0 == CreateProcess(cmd, client->request.params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
+    if (0 == CreateProcessA(cmd, client->request.params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
         Logln("Error create %d", GetLastError());
         http_response_code(500, client);
         return 0;
@@ -513,11 +526,7 @@ int cgi_process(Client* const client, const char* cmd) {
 int dispatch(Client* const client) {
 
     int len;
-
-    char* buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE);
-    memset(buffer, 0, BUFFER_SIZE);
-    len = recv(client->fd, buffer, BUFFER_SIZE, 0);
-
+    len = recv(client->fd, client->request.buff, BUFFER_SIZE, 0);
     int rtn = 0;
     do {
 
@@ -530,15 +539,15 @@ int dispatch(Client* const client) {
         }
 
         if (verbose) {
-            Logln("\r\n%s", buffer);
+            Logln("\r\n%s", client->request.buff);
         }
 
         Request* req = &client->request;
         char* address = inet_ntoa(client->address.sin_addr);
 
-        if (parse_head(buffer, len, req) != 0) {
+        if (parse_head(req) != 0) {
             Logln("Bad request from %s", address);
-            Logln("Recv : %s", buffer);
+            Logln("Recv : %s", client->request.buff);
             http_response_code(400, client);
             break;
         }
@@ -547,8 +556,15 @@ int dispatch(Client* const client) {
             Logln("%s: %s %s", req->method, address, req->path);
         }
 
-        // just support get
-        if (0 != _stricmp(req->method, "GET")) {
+        // check method
+        BOOL method_able = FALSE;
+        for (int i = 0; i < 6; i++) {
+            if (0 == _stricmp(req->method, HTTP_METHOD[i])) {
+                method_able = TRUE;
+                break;
+            }
+        }
+        if (!method_able) {
             http_response_code(405, client);
             break;
         }
@@ -582,7 +598,6 @@ int dispatch(Client* const client) {
 
         http_response_code(404, client);
     } while (0);
-    free(buffer);
     return rtn;
 }
 
@@ -699,7 +714,6 @@ void main_loop() {
             int length = sizeof(client->address);
             client->fd = accept(server_fd, (SOCKADDR *)&client->address, &length);
             if (client->fd > 0) {
-                //WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
                 add_client(client);
             } else {
                 free_client(client);
@@ -721,7 +735,7 @@ void main_loop() {
             } else if (FD_ISSET(client->fd, &writefds)) {
                 if(client->flag == WRITE) {
                     client->active = now;
-                    if (send_response(client) != 0){
+                    if (send_response(client) != 0 || !client->keep){
                         client->flag = CLOSED;
                     } else {
                         reset_client(client);
