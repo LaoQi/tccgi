@@ -45,13 +45,14 @@
 
 #define PUSH_ENV(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%s", y, z);}
 #define PUSH_ENV_D(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%d", y, z);}
+#define PUSH_ENV_H(x, y, z) {x += strlen(x) + 1; sprintf(x, "HTTP_%s=%s", y, z);}
 //#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); strcat(_logbuff, "\n"); write(STDOUT_FILENO,_logbuff,strlen(_logbuff));} while(0);
 
 #define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); strcat(_logbuff, "\n"); fwrite(_logbuff, strlen(_logbuff), 1, stdout); fflush(stdout);} while(0);
 #define SOCPERROR Logln("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 
 #define HEADER_SET(REQ, KEY, VALUE) do{ if (REQ->header_top < MAX_HEADER) { strcpy(REQ->header[REQ->header_top*2], KEY); strcpy(REQ->header[REQ->header_top*2+1], VALUE);REQ->header_top++; }}while(0);
-#define HEADER_ISSET(REQ, KEY, VALUE) header_isset(REQ, KEY, VALUE);
+#define HEADER_ISSET(REQ, KEY, VALUE) header_isset(REQ, KEY, VALUE)
 
 typedef struct _Request {
     char buff[BUFFER_SIZE];
@@ -267,20 +268,26 @@ int parse_head(Request* req) {
     for (;data[i] != 0 && i < BUFFER_SIZE; i++) {
         switch(data[i]){
             case ' ':
+                if (second && vi < PARAM_LENGTH && vi > 0) {
+                    value[vi++] = data[i];
+                }
+                break;
             case '\r':
             case '\t':
                 break;
             case '\n':
             {
-                HEADER_SET(req, key, value);
-                memset(key, 0, PARAM_LENGTH);
-                memset(value, 0, PARAM_LENGTH);
+                if (strlen(key) > 0 && strlen(value) > 0) {
+                    HEADER_SET(req, key, value);
+                    memset(key, 0, PARAM_LENGTH);
+                    memset(value, 0, PARAM_LENGTH);
+                }
                 second = FALSE;
                 ki = vi = 0;
                 break;
             }
             case ':':
-                if (second && ki < PARAM_LENGTH) {
+                if (second && vi < PARAM_LENGTH) {
                     value[vi++] = data[i];
                 }
                 second = TRUE;
@@ -310,7 +317,6 @@ int clear_buffer(char *buffer, size_t buffsize) {
 }
 
 void build_cgi_req(Request *req, const char* path) {
-    sprintf(req->script_name, "%s%s", req->path, cgi_ext);
     if (NULL == strchr(req->query_string, '=') && strlen(req->query_string) > 1) {
         sprintf(req->params, "%s %s", path, req->query_string);
         char* p = strchr(req->params, ' ');
@@ -327,11 +333,16 @@ void build_cgi_req(Request *req, const char* path) {
 
 void build_cgi_env(char* env, Request* req) {
     memset(env, 0, ENV_LENGTH);
-    sprintf(env, "%s=%s", "SERVER_NAME", "Boom shaka Laka");
+    char server_name[256];
+    if (HEADER_ISSET(req, "Host", server_name)) {
+        sprintf(env, "%s=%s", "SERVER_NAME", server_name);
+    } else {
+        sprintf(env, "%s=%s", "SERVER_NAME", "127.0.0.1");
+    }
     // env += strlen(env) + 1;
     // sprintf(env, "%s=%s", "PATH", req->path);
     PUSH_ENV(env, "QUERY_STRING", req->query_string);
-    PUSH_ENV(env, "SERVER_SOFTWARE", __NAME__);
+    PUSH_ENV(env, "SERVER_SOFTWARE", __NAME__" "__VERSION__);
     PUSH_ENV(env, "GATEWAY_INTERFACE", "CGI/1.1");
     PUSH_ENV(env, "SERVER_PROTOCOL", "HTTP/1.1");
     PUSH_ENV_D(env, "SERVER_PORT", bind_port);
@@ -341,6 +352,17 @@ void build_cgi_env(char* env, Request* req) {
     PUSH_ENV(env, "REMOTE_ADDR", req->remote_addr);
     PUSH_ENV_D(env, "REMOTE_PORT", req->remote_port);
     // PUSH_ENV(env, "REQUEST_URI", req->request_uri)
+    for (int i = 0; i < req->header_top; i++) {
+        char header_name[PARAM_LENGTH];
+        strcpy(header_name, req->header[i * 2]);
+        for (int j = 0; j < strlen(header_name); j++) {
+            if (header_name[j] == '-') {
+                header_name[j] = '_';
+            }
+        }
+        _strupr(header_name);
+        PUSH_ENV_H(env, header_name, req->header[i * 2 + 1]);
+    }
     env = env + strlen(env);
     sprintf(env, "%c%c", 0, 0);
 }
@@ -646,16 +668,18 @@ int dispatch(Client* const client) {
             rtn = static_file(path, client);
             break;
         } else {
-            sprintf(cgi_path, "%s%s", path, cgi_ext);
-            if (0 == _access(path, 0)) {
-                build_cgi_req(req, path);
-                rtn = cgi_process(client, path);
-                break;
-            } else if (0 == _access(cgi_path, 0)) {
-                build_cgi_req(req, cgi_path);
-                rtn = cgi_process(client, cgi_path);
-                break;
+            strcpy(req->script_name, req->path);
+            if (0 != _access(path, 0)) {
+                strcat(path, cgi_ext);
+                strcat(req->script_name, cgi_ext);
+                if (0 != _access(path, 0)) {
+                    http_response_code(404, client);
+                    break;
+                }
             }
+            build_cgi_req(req, path);
+            rtn = cgi_process(client, path);
+            break;
         }
 
         http_response_code(404, client);
@@ -851,7 +875,7 @@ int main(int argc, char* argv[]) {
             exit(1);
     }
     
-    Logln("www_root : %s\nCGI extname : %s\nBind port : %d\nCGI timeout : %d seconds",
+    Logln("www_root : %s\nCGI extname : %s\nBind port : %d\nCGI timeout : %d seconds\n",
         www_root, cgi_ext + 1, bind_port, cgi_timeout);
     main_loop();
     return 0;

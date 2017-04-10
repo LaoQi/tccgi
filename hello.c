@@ -4,7 +4,16 @@
 
 #define PRINT_ENV(x) {printf("<b>%s</b> : %s<br>", x, getenv(x));}
 
+extern char** environ;
+
 void EnumEnvironment() {
+	printf("<pre>");
+	for (int i = 0; environ[i] != NULL; i++)
+    {
+        printf("%s\n", environ[i]);
+    }
+	printf("</pre>");
+	/*
     PRINT_ENV("SERVER_NAME");
     PRINT_ENV("QUERY_STRING");
     PRINT_ENV("SERVER_SOFTWARE");
@@ -15,6 +24,7 @@ void EnumEnvironment() {
     PRINT_ENV("SCRIPT_NAME");
     PRINT_ENV("REMOTE_ADDR");
     PRINT_ENV("REMOTE_PORT");
+	*/
 }
 
 int main(int argc, char* argv[]) {
