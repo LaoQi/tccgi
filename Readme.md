@@ -6,7 +6,7 @@
 
 ### 构建：
   
-`winsock2.h` 来自MinGW项目的win32API。
+`winsock2.h` 来自[MinGW](http://mingw.org/)项目的win32API。  
 依赖`ws2_32.dll`,使用：
 ```  
 tiny_imdef.exe ws2_32.dll
@@ -14,8 +14,15 @@ tiny_imdef.exe ws2_32.dll
 生成`ws2_32.def` 执行:
 ```  
 tcc.exe server.c ws2_32.def
+```  
+
+测试例子同样由`tcc`编译生成  
 ```
-构建完成:)
+tcc hello.c -o hello.cgi
+```  
+
+构建完成， 访问`http://127.0.0.1:9527/hello` : ) 
+
 
 ### 支持程度：
   
@@ -56,3 +63,5 @@ server.exe -e bat
 [https://github.com/LaoQi/icode/tree/master/tccgi](https://github.com/LaoQi/icode/tree/master/tccgi)
 
 ### License : MIT 
+
+### winsock2.h [License](http://mingw.org/license)
