@@ -50,6 +50,9 @@
 #define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); strcat(_logbuff, "\n"); fwrite(_logbuff, strlen(_logbuff), 1, stdout); fflush(stdout);} while(0);
 #define SOCPERROR Logln("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 
+#define HEADER_SET(REQ, KEY, VALUE) do{ if (REQ->header_top < MAX_HEADER) { strcpy(REQ->header[REQ->header_top*2], KEY); strcpy(REQ->header[REQ->header_top*2+1], VALUE);REQ->header_top++; }}while(0);
+#define HEADER_ISSET(REQ, KEY, VALUE) header_isset(REQ, KEY, VALUE);
+
 typedef struct _Request {
     char buff[BUFFER_SIZE];
     char path[PATH_LENGTH];
@@ -59,6 +62,8 @@ typedef struct _Request {
     char remote_addr[60];
     char script_name[PATH_LENGTH];
     char method[8];
+    char header[MAX_HEADER * 2][PARAM_LENGTH];
+    int header_top;
     int remote_port;
 } Request;
 
@@ -100,12 +105,11 @@ char HTTP_CODE[HTTP_CODE_NUM][50] = {
 };
 
 char* HTTP_METHOD[] = {
-    "HEAD",
     "GET",
-    "PUT",
     "POST",
+    "HEAD",
+    "PUT",
     "DELETE",
-    "OPTIONS"
 };
 
 #define MIME_TYPE_NUM 12
@@ -216,6 +220,20 @@ char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     return cdr;
 }
 
+BOOL header_isset(Request* req, const char* key, char* value) {
+    size_t index = 0;
+    BOOL exist = FALSE;
+    while (index < req->header_top) {
+        if (_stricmp(req->header[index * 2], key) == 0) {
+            exist = TRUE; 
+            strcpy(value, req->header[index * 2 + 1]);
+            break; 
+        } 
+        index++; 
+    } 
+    return exist;
+}
+
 int parse_head(Request* req) {
     char* data = req->buff;
     size_t i = 0, pi = 0;
@@ -237,6 +255,44 @@ int parse_head(Request* req) {
         req->query_string[pi++] = data[i++];
     }
     req->query_string[pi] = '\0';
+    while (data[i] != '\n' && i < BUFFER_SIZE) {
+        i++;
+    }
+    i++;
+    char key[PARAM_LENGTH], value[PARAM_LENGTH];
+    size_t ki = 0, vi = 0;
+    BOOL second = FALSE;
+    memset(key, 0, PARAM_LENGTH);
+    memset(value, 0, PARAM_LENGTH);
+    for (;data[i] != 0 && i < BUFFER_SIZE; i++) {
+        switch(data[i]){
+            case ' ':
+            case '\r':
+            case '\t':
+                break;
+            case '\n':
+            {
+                HEADER_SET(req, key, value);
+                memset(key, 0, PARAM_LENGTH);
+                memset(value, 0, PARAM_LENGTH);
+                second = FALSE;
+                ki = vi = 0;
+                break;
+            }
+            case ':':
+                if (second && ki < PARAM_LENGTH) {
+                    value[vi++] = data[i];
+                }
+                second = TRUE;
+                break;
+            default:
+                if (second && vi < PARAM_LENGTH) {
+                    value[vi++] = data[i];
+                } else if (ki < PARAM_LENGTH) {
+                    key[ki++] = data[i];
+                }
+        }
+    }
     return 0;
 }
 
@@ -550,6 +606,12 @@ int dispatch(Client* const client) {
             Logln("Recv : %s", client->request.buff);
             http_response_code(400, client);
             break;
+        }
+
+        char keep_type[PARAM_LENGTH];
+        BOOL keep = HEADER_ISSET(req, "Connection", keep_type);
+        if (keep && _stricmp(keep_type, "keep-alive") == 0) {
+            client->keep = TRUE;
         }
 
         if (!verbose) {
