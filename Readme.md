@@ -41,8 +41,6 @@ SCRIPT_NAME
 REMOTE_ADDR
 REMOTE_PORT
 ```
-
-cgi支持`Content-Type`与`Status`头部，不支持`Location`头  
   
 ### 执行：
 ```  
