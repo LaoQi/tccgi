@@ -205,6 +205,73 @@ void rm_client(Client* client) {
     top_client = top;
 }
 
+char* urldecode(char *input) {
+    char* temp = malloc((strlen(input) + 1)*sizeof(char));
+    char* q = input;
+    char* p = temp;
+    while(*q) {
+        if(*q == '%' && strlen(q) > 2){
+            char buffer[3] = { q[1], q[2], 0 };
+            *p++ = strtol(buffer, NULL, 16);
+            q += 3;
+        } else {
+            *p++ = *q++;
+        }
+    }
+	*p = 0; //null terminate
+    strcpy(input, temp);
+    free(temp);
+	return input;
+}
+
+int cU8xU(WCHAR* pOut, char *pText) {
+    int ret = 0;
+    char* uchar = (char *)pOut;
+    unsigned cIn = (unsigned char)pText[0];
+    if (cIn<0x80) {              // ASCII  0x00 ~ 0x7f 
+        pOut[0] = pText[0];
+    } else if (cIn<0xdf) {
+        uchar[0] = (pText[0] << 6) | (pText[1] & 0x3f);
+        uchar[1] = (pText[0] >> 2) & 0x0f;
+        ret = 1;
+    } else if (cIn<0xef) {
+        uchar[0] = (pText[1] << 6) | (pText[2] & 0x3f);
+        uchar[1] = (pText[0] << 4) | ((pText[1] >> 2) & 0x0f);
+        ret = 2;
+    } else if (cIn<0xf7) {
+        uchar[0] = (pText[2] << 6) | (pText[3] & 0x3f);
+        uchar[1] = (pText[1] << 4) | ((pText[2] >> 2) & 0x0f);
+        uchar[2] = ((pText[0] << 2) & 0x1c) | ((pText[1] >> 4) & 0x03);
+        ret = 3;
+    }
+    return ret;
+}
+
+int cUxG(char* pOut, WCHAR* pText) {
+    int ret = 0;
+    if (pText[0]<0x80) {        // ASCII  0x00 ~ 0x7f 
+        pOut[0] = (char)pText[0];
+    } else {
+        WideCharToMultiByte(CP_ACP, 0, pText, 1, pOut, sizeof(WCHAR), NULL, NULL);
+        ret = 1;
+    }
+    return ret;
+}
+
+int sU8xG(char* pOut, char* pText, int Len) {
+    int i, j;
+    WCHAR buf;
+    for (i = 0, j = 0; i<Len; i++, j++) {
+        if ((unsigned)pText[i] < 0x80) {       // ASCII  0x00 ~ 0x7f 
+            pOut[j] = pText[i];
+        } else {
+            i += cU8xU(&buf, &pText[i]);
+            j += cUxG(&pOut[j], &buf);
+        }
+    }
+    return j;
+}
+
 char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     size_t i = 0;
     while (i < len && *cdr != '\0' && *cdr != delim) {
@@ -660,25 +727,31 @@ int dispatch(Client* const client) {
         char cgi_path[PATH_LENGTH];
         strcpy(path, www_root);
         strcat(path, req->path);
+        // urldecode utf8->gb2312
+        char local_path[MAX_PATH];
+        urldecode(path);
+        memset(local_path, 0, MAX_PATH);
+        sU8xG(local_path, path, strlen(path));
+
         if (0 == strcmp(req->path, "/")) {
-            strcat(path, INDEX_PAGE);
+            strcat(local_path, INDEX_PAGE);
         }
 
-        if (0 == _access(path, 0) && 0 != strcmp((path + strlen(path) - cgi_ext_len), cgi_ext)) {
-            rtn = static_file(path, client);
+        if (0 == _access(local_path, 0) && 0 != strcmp((local_path + strlen(local_path) - cgi_ext_len), cgi_ext)) {
+            rtn = static_file(local_path, client);
             break;
         } else {
             strcpy(req->script_name, req->path);
-            if (0 != _access(path, 0)) {
-                strcat(path, cgi_ext);
+            if (0 != _access(local_path, 0)) {
+                strcat(local_path, cgi_ext);
                 strcat(req->script_name, cgi_ext);
-                if (0 != _access(path, 0)) {
+                if (0 != _access(local_path, 0)) {
                     http_response_code(404, client);
                     break;
                 }
             }
-            build_cgi_req(req, path);
-            rtn = cgi_process(client, path);
+            build_cgi_req(req, local_path);
+            rtn = cgi_process(client, local_path);
             break;
         }
 
