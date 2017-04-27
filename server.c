@@ -597,8 +597,9 @@ int cgi_parse(Client* const client, HANDLE hProcess, HANDLE hReadPipe) {
         response->code = atoi(code);
         strcpy(response->phrase, p);
     } else if (strncmp("Location", line_buff, 8) == 0) {
-        // @todo
-        add_header(response, "Location", "");
+        response->code = 302;
+        strcpy(response->phrase, "302 Found");
+        add_header(response, "Location", (char*)(line_buff + 9));
     } else {
         Logln("Error cgi content");
         return 5;
