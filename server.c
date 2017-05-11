@@ -514,7 +514,7 @@ int static_file(const char *path, Client* const client) {
     errno_t err;
     if ((err = fopen_s(&fp, path, "rb")) != 0) {
         Logln("file %s error!", path);
-        http_response_code(500, client);
+        http_response_code(403, client);
         return 0;
     }
     fseek(fp, 0, SEEK_END);
@@ -734,7 +734,7 @@ int dispatch(Client* const client) {
         memset(local_path, 0, MAX_PATH);
         sU8xG(local_path, path, strlen(path));
 
-        if (0 == strcmp(req->path, "/")) {
+        if (req->path[strlen(req->path) - 1] == '/') {
             strcat(local_path, INDEX_PAGE);
         }
 
